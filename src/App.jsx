@@ -7,7 +7,7 @@ import { parseMeaningQuery } from "./services/intentParser";
 import { fetchMeaning, speakMeaning, stopSpeaking } from "./services/meaningService";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 
-const HISTORY_KEY = "voice-meaning-history-v3";
+const HISTORY_KEY = "voice-meaning-history-v4";
 
 export default function App() {
   const [entries, setEntries] = useState(() => {
@@ -19,26 +19,30 @@ export default function App() {
   const [speaking, setSpeaking] = useState(false);
   const [typedText, setTypedText] = useState("");
   const [language, setLanguage] = useState("en");
-  const voiceSessionRef = useRef(0);
+
+  const voiceActiveRef = useRef(false);
+  const voiceGenerationRef = useRef(0);
 
   useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, 50)));
   }, [entries]);
 
-  const finishVoiceTurn = useCallback((sessionId) => {
-    if (voiceSessionRef.current !== sessionId) return;
+  const finishVoiceTurn = useCallback((generation) => {
+    if (!voiceActiveRef.current || voiceGenerationRef.current !== generation) return;
+    setSpeaking(false);
     resume();
   }, []);
 
-  const processSentence = useCallback(async (sentence) => {
+  const processSentence = useCallback(async (sentence, fromVoice = false) => {
     const query = parseMeaningQuery(sentence);
 
     if (!query) {
       setMessage("Please say a word, phrase, sentence, idiom, or expression.");
+      if (fromVoice) finishVoiceTurn(voiceGenerationRef.current);
       return;
     }
 
-    const sessionId = voiceSessionRef.current;
+    const generation = voiceGenerationRef.current;
 
     setEntries((current) => [
       { id: crypto.randomUUID(), text: sentence.trim(), time: Date.now() },
@@ -51,30 +55,29 @@ export default function App() {
 
     try {
       const result = await fetchMeaning(query, language);
-      if (voiceSessionRef.current !== sessionId) return;
+
+      if (fromVoice && (!voiceActiveRef.current || voiceGenerationRef.current !== generation)) {
+        return;
+      }
 
       setMeaning(result);
 
       if (result.speechText) {
         speakMeaning(result.speechText, language, {
           onStart: () => setSpeaking(true),
-          onEnd: () => {
-            setSpeaking(false);
-            finishVoiceTurn(sessionId);
-          },
-          onError: () => {
-            setSpeaking(false);
-            finishVoiceTurn(sessionId);
-          },
+          onEnd: () => finishVoiceTurn(generation),
+          onError: () => finishVoiceTurn(generation),
         });
-      } else {
-        finishVoiceTurn(sessionId);
+      } else if (fromVoice) {
+        finishVoiceTurn(generation);
       }
     } catch (error) {
-      if (voiceSessionRef.current === sessionId) {
+      if (fromVoice && voiceActiveRef.current && voiceGenerationRef.current === generation) {
         setMeaning(null);
         setMessage(error.message || "Unable to explain that right now.");
-        finishVoiceTurn(sessionId);
+        finishVoiceTurn(generation);
+      } else if (!fromVoice) {
+        setMessage(error.message || "Unable to explain that right now.");
       }
     } finally {
       setLoading(false);
@@ -82,12 +85,13 @@ export default function App() {
   }, [finishVoiceTurn, language]);
 
   const handleFinal = useCallback((sentence) => {
-    // Recognition has already been aborted by the hook.
-    processSentence(sentence);
+    // The recognition hook suspends its automatic restart before calling this.
+    processSentence(sentence, true);
   }, [processSentence]);
 
   const handleError = useCallback((code) => {
     if (code === "not-allowed" || code === "service-not-allowed") {
+      voiceActiveRef.current = false;
       setMessage("Microphone permission is required for continuous voice mode.");
     } else if (code === "network") {
       setMessage("Reconnecting voice recognition...");
@@ -96,25 +100,28 @@ export default function App() {
     }
   }, []);
 
-  const { start, resume, pause, stop, status, interim, error, supported } =
+  const { resume, pause, stop, status, interim, error, supported } =
     useSpeechRecognition({ onFinal: handleFinal, onError: handleError });
 
   function handleStart() {
-    voiceSessionRef.current += 1;
+    voiceGenerationRef.current += 1;
+    voiceActiveRef.current = true;
     setMessage("");
     resume();
   }
 
   function handlePause() {
+    voiceActiveRef.current = false;
+    voiceGenerationRef.current += 1;
     pause();
-    voiceSessionRef.current += 1;
     stopSpeaking();
     setSpeaking(false);
   }
 
   function handleStop() {
+    voiceActiveRef.current = false;
+    voiceGenerationRef.current += 1;
     stop();
-    voiceSessionRef.current += 1;
     stopSpeaking();
     setSpeaking(false);
   }
@@ -129,7 +136,7 @@ export default function App() {
   }
 
   function submitTyped() {
-    if (typedText.trim()) processSentence(typedText.trim());
+    if (typedText.trim()) processSentence(typedText.trim(), false);
   }
 
   function clearHistory() {
@@ -147,7 +154,7 @@ export default function App() {
           <div className="brand-icon"><BookOpen size={19} /></div>
           <div>
             <div className="brand-name">Voice Meaning Assistant</div>
-            <div className="brand-subtitle">Speak naturally. I'll explain it continuously.</div>
+            <div className="brand-subtitle">One Start. Continuous voice. Automatic answers.</div>
           </div>
         </div>
         <div className="top-controls">
@@ -178,8 +185,8 @@ export default function App() {
           <div className="eyebrow"><span className="pulse-dot" /> CONTINUOUS VOICE</div>
           <h1>Speak it.<br /><span>Understand it.</span></h1>
           <p>
-            Press Start once. Speak naturally. I find a free meaning when possible,
-            speak the result, and automatically listen for your next question.
+            Press Start once. Ask one question after another. I find a free meaning when possible,
+            speak the result, and automatically listen again after every answer.
           </p>
 
           <MicrophoneButton
@@ -193,9 +200,9 @@ export default function App() {
 
           <div className="quick-hints">
             <span>Try:</span>
-            <button onClick={() => processSentence("What does ubiquitous mean?")}>“What does ubiquitous mean?”</button>
-            <button onClick={() => processSentence("What does ephemeral mean?")}>“What does ephemeral mean?”</button>
-            <button onClick={() => processSentence("What does break a leg mean?")}>“What does break a leg mean?”</button>
+            <button onClick={() => processSentence("What does ubiquitous mean?", false)}>“What does ubiquitous mean?”</button>
+            <button onClick={() => processSentence("What does ephemeral mean?", false)}>“What does ephemeral mean?”</button>
+            <button onClick={() => processSentence("What does break a leg mean?", false)}>“What does break a leg mean?”</button>
           </div>
         </section>
 
@@ -255,7 +262,7 @@ export default function App() {
 
         <section className="bottom-bar">
           <div className="privacy-inline">
-            <span>Microphone starts only after you activate it. Raw microphone audio is never uploaded or stored.</span>
+            <span>Raw microphone audio is never uploaded or stored. STOP permanently ends the voice session.</span>
           </div>
           <button className="clear-button" onClick={clearHistory}>
             <Trash2 size={15} /> Clear History
