@@ -1,56 +1,46 @@
-const API = "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const API_PATH = "/api/meaning";
 
-export async function fetchMeaning(word) {
-  const query = word.trim();
-  if (!query) throw new Error("Please say a word or phrase.");
+export async function fetchMeaning(text, targetLanguage = "en") {
+  const response = await fetch(API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: text.trim(), targetLanguage }),
+  });
 
-  const response = await fetch(API + encodeURIComponent(query));
+  let data = null;
+  try { data = await response.json(); } catch {}
 
   if (!response.ok) {
-    throw new Error(`I couldn't find a meaning for “${query}”. Try saying a single English word.`);
+    throw new Error(data?.error || "I couldn't get an explanation. Please check your internet connection and try again.");
   }
 
-  const data = await response.json();
-  const entry = data?.[0];
-  const meanings = entry?.meanings || [];
-
-  const definitions = meanings
-    .flatMap((meaning) =>
-      (meaning.definitions || []).slice(0, 2).map((definition) => ({
-        partOfSpeech: meaning.partOfSpeech,
-        definition: definition.definition,
-        example: definition.example,
-      }))
-    )
-    .slice(0, 4);
-
-  if (!definitions.length) {
-    throw new Error(`I couldn't find a definition for “${query}”.`);
-  }
-
-  return {
-    word: entry.word || query,
-    phonetic: entry.phonetic || "",
-    definitions,
-  };
+  return data;
 }
 
-export function speakMeaning(result) {
+export function speakMeaning(text, language = "en", callbacks = {}) {
   if (!("speechSynthesis" in window)) {
-    throw new Error("Text-to-speech is not supported in this browser.");
+    callbacks.onError?.();
+    throw new Error("Your browser does not support spoken responses.");
   }
 
   window.speechSynthesis.cancel();
 
-  const parts = result.definitions.map((item, index) => {
-    const prefix = item.partOfSpeech ? `${item.partOfSpeech}: ` : "";
-    return `Definition ${index + 1}. ${prefix}${item.definition}${item.example ? ` Example: ${item.example}` : ""}`;
-  });
-
-  const utterance = new SpeechSynthesisUtterance(
-    `${result.word}. ${parts.join(" ")}`
-  );
-  utterance.rate = 0.92;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = language === "hi" ? "hi-IN" : language === "es" ? "es-ES" : language === "fr" ? "fr-FR" : language === "de" ? "de-DE" : "en-US";
+  utterance.rate = 0.9;
   utterance.pitch = 1;
+
+  const voices = window.speechSynthesis.getVoices();
+  const preferred = voices.find((voice) => voice.lang.toLowerCase().startsWith(utterance.lang.slice(0, 2).toLowerCase()));
+  if (preferred) utterance.voice = preferred;
+
+  utterance.onstart = () => callbacks.onStart?.();
+  utterance.onend = () => callbacks.onEnd?.();
+  utterance.onerror = () => callbacks.onError?.();
+
   window.speechSynthesis.speak(utterance);
+}
+
+export function stopSpeaking() {
+  window.speechSynthesis?.cancel();
 }
