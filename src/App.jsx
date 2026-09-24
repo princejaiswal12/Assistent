@@ -1,33 +1,33 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { BookOpen, Trash2, Volume2, Square } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { BookOpen, ExternalLink, Trash2 } from "lucide-react";
 import MicrophoneButton from "./components/MicrophoneButton";
 import StatusIndicator from "./components/StatusIndicator";
 import Transcript from "./components/Transcript";
 import { parseMeaningQuery } from "./services/intentParser";
-import { fetchMeaning, speakMeaning, stopSpeaking } from "./services/meaningService";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 
-const HISTORY_KEY = "voice-meaning-history-v2";
+const HISTORY_KEY = "voice-google-search-history-v1";
 
 export default function App() {
   const [entries, setEntries] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    } catch {
+      return [];
+    }
   });
-  const [meaning, setMeaning] = useState(null);
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
   const [typedText, setTypedText] = useState("");
-  const [language, setLanguage] = useState("en");
+  const [message, setMessage] = useState("");
 
   useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, 50)));
   }, [entries]);
 
-  const processSentence = useCallback(async (sentence) => {
+  const searchGoogle = useCallback((sentence) => {
     const query = parseMeaningQuery(sentence);
+
     if (!query) {
-      setMessage("Please say a word, phrase, sentence, idiom, or expression.");
+      setMessage("Please say or type something to search.");
       return;
     }
 
@@ -36,28 +36,12 @@ export default function App() {
       ...current,
     ].slice(0, 50));
 
-    setLoading(true);
-    setSpeaking(false);
-    setMessage("");
+    setMessage(`Searching Google for “${query}”…`);
 
-    try {
-      const result = await fetchMeaning(query, language);
-      setMeaning(result);
-
-      if (result.speechText) {
-        speakMeaning(result.speechText, language, {
-          onStart: () => setSpeaking(true),
-          onEnd: () => setSpeaking(false),
-          onError: () => setSpeaking(false),
-        });
-      }
-    } catch (error) {
-      setMeaning(null);
-      setMessage(error.message || "Unable to explain that right now.");
-    } finally {
-      setLoading(false);
-    }
-  }, [language]);
+    // No API key, backend, or paid service is required.
+    const googleUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    window.location.href = googleUrl;
+  }, []);
 
   const handleError = useCallback((code) => {
     if (code === "not-allowed" || code === "service-not-allowed") {
@@ -70,27 +54,15 @@ export default function App() {
   }, []);
 
   const { start, pause, stop, status, interim, error, supported } =
-    useSpeechRecognition({ onFinal: processSentence, onError: handleError });
+    useSpeechRecognition({ onFinal: searchGoogle, onError: handleError });
+
+  function submitTyped() {
+    if (typedText.trim()) searchGoogle(typedText.trim());
+  }
 
   function clearHistory() {
     setEntries([]);
-    setMeaning(null);
     setMessage("History cleared.");
-    stopSpeaking();
-    setSpeaking(false);
-  }
-
-  function repeatMeaning() {
-    if (!meaning?.speechText) return;
-    speakMeaning(meaning.speechText, language, {
-      onStart: () => setSpeaking(true),
-      onEnd: () => setSpeaking(false),
-      onError: () => setSpeaking(false),
-    });
-  }
-
-  function submitTyped() {
-    if (typedText.trim()) processSentence(typedText.trim());
   }
 
   return (
@@ -99,23 +71,11 @@ export default function App() {
         <div className="brand">
           <div className="brand-icon"><BookOpen size={19} /></div>
           <div>
-            <div className="brand-name">Voice Meaning Assistant</div>
-            <div className="brand-subtitle">Speak naturally. I'll explain it.</div>
+            <div className="brand-name">Voice Google Search</div>
+            <div className="brand-subtitle">Speak naturally. Search Google instantly.</div>
           </div>
         </div>
-        <div className="top-controls">
-          <label className="language-select">
-            Explain in
-            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="en">English</option>
-              <option value="hi">Hindi</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-            </select>
-          </label>
-          <StatusIndicator status={speaking ? "speaking" : status} />
-        </div>
+        <StatusIndicator status={status} />
       </header>
 
       <main className="content">
@@ -128,11 +88,11 @@ export default function App() {
         {message && <div className="notice">{message}</div>}
 
         <section className="hero">
-          <div className="eyebrow"><span className="pulse-dot" /> VOICE MEANING</div>
-          <h1>Speak it.<br /><span>Understand it.</span></h1>
+          <div className="eyebrow"><span className="pulse-dot" /> GOOGLE SEARCH</div>
+          <h1>Speak it.<br /><span>Search it.</span></h1>
           <p>
-            Ask about a word, sentence, idiom, expression, or short paragraph.
-            The assistant uses online language services, explains the result, and reads it aloud.
+            Say a word, question, sentence, phrase, or anything else.
+            Your voice is converted to text in the browser and the query is sent directly to Google Search.
           </p>
 
           <MicrophoneButton status={status} onStart={start} onPause={pause} onStop={stop} />
@@ -140,9 +100,9 @@ export default function App() {
 
           <div className="quick-hints">
             <span>Try:</span>
-            <button onClick={() => processSentence("What does ubiquitous mean?")}>“What does ubiquitous mean?”</button>
-            <button onClick={() => processSentence("Explain this sentence: I have been working here for five years.")}>“Explain this sentence”</button>
-            <button onClick={() => processSentence("What does break a leg mean?")}>“Explain an idiom”</button>
+            <button onClick={() => searchGoogle("What does ubiquitous mean?")}>“What does ubiquitous mean?”</button>
+            <button onClick={() => searchGoogle("best way to learn DSA")}>“Best way to learn DSA”</button>
+            <button onClick={() => searchGoogle("weather in Delhi today")}>“Weather in Delhi today”</button>
           </div>
         </section>
 
@@ -151,44 +111,13 @@ export default function App() {
             value={typedText}
             onChange={(e) => setTypedText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitTyped()}
-            placeholder="Type a word, sentence, idiom, or phrase to test"
-            aria-label="Text to explain"
+            placeholder="Type anything to search Google"
+            aria-label="Google search text"
           />
-          <button className="speak-button" onClick={submitTyped}>Explain</button>
+          <button className="speak-button" onClick={submitTyped}>
+            <ExternalLink size={17} /> Search Google
+          </button>
         </section>
-
-        {loading && <div className="notice">Understanding and explaining…</div>}
-
-        {meaning && (
-          <section className="meaning-card">
-            <div className="meaning-header">
-              <div>
-                <div className="meaning-word">{meaning.title}</div>
-                {meaning.phonetic && <div className="phonetic">{meaning.phonetic}</div>}
-              </div>
-              <div className="speech-actions">
-                <button className="speak-button" onClick={repeatMeaning}>
-                  <Volume2 size={18} /> {speaking ? "Speaking..." : "Speak Again"}
-                </button>
-                {speaking && (
-                  <button className="stop-speech-button" onClick={() => { stopSpeaking(); setSpeaking(false); }} title="Stop speaking">
-                    <Square size={15} /> Stop
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="meaning-sections">
-              {meaning.meaning && <article><h3>Meaning</h3><p>{meaning.meaning}</p></article>}
-              {meaning.simple && <article><h3>In simple words</h3><p>{meaning.simple}</p></article>}
-              {meaning.translation && <article><h3>Translation</h3><p>{meaning.translation}</p></article>}
-              {meaning.example && <article><h3>Example</h3><p>{meaning.example}</p></article>}
-              {meaning.usage && <article><h3>Usage</h3><p>{meaning.usage}</p></article>}
-              {meaning.grammar && <article><h3>Grammar</h3><p>{meaning.grammar}</p></article>}
-              {meaning.similar && <article><h3>Similar words</h3><p>{meaning.similar}</p></article>}
-            </div>
-          </section>
-        )}
 
         <div className="grid single-column">
           <Transcript entries={entries} interim={interim} />
