@@ -7,15 +7,23 @@ export const SUPPORT =
 export function useSpeechRecognition({ onFinal, onError }) {
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
+  const startingRef = useRef(false);
   const restartTimerRef = useRef(null);
 
   const [status, setStatus] = useState("stopped");
   const [interim, setInterim] = useState("");
   const [error, setError] = useState("");
 
-  const createRecognition = useCallback(() => {
+  const clearRestart = useCallback(() => {
+    if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
+    restartTimerRef.current = null;
+  }, []);
+
+  const startRecognition = useCallback(() => {
+    if (!shouldListenRef.current || startingRef.current) return;
+
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) return null;
+    if (!Recognition) return;
 
     const recognition = new Recognition();
     recognition.continuous = true;
@@ -24,6 +32,8 @@ export function useSpeechRecognition({ onFinal, onError }) {
     recognition.lang = "en-IN";
 
     recognition.onstart = () => {
+      startingRef.current = false;
+      recognitionRef.current = recognition;
       setStatus("listening");
       setError("");
     };
@@ -36,7 +46,11 @@ export function useSpeechRecognition({ onFinal, onError }) {
         const transcript = result?.[0]?.transcript?.trim() || "";
 
         if (result.isFinal) {
-          if (transcript) onFinal(transcript);
+          if (transcript) {
+            // Pause recognition before processing so TTS cannot become the next query.
+            try { recognition.abort(); } catch {}
+            onFinal(transcript);
+          }
         } else {
           live += transcript + " ";
         }
@@ -50,22 +64,25 @@ export function useSpeechRecognition({ onFinal, onError }) {
 
       if (code === "not-allowed" || code === "service-not-allowed") {
         shouldListenRef.current = false;
+        startingRef.current = false;
         setStatus("permission");
-        setError("Microphone permission was denied. Allow microphone access in the browser and try again.");
+        setError("Microphone permission was denied. Allow microphone access for continuous voice mode.");
         onError?.(code);
         return;
       }
 
       if (code === "audio-capture") {
         shouldListenRef.current = false;
+        startingRef.current = false;
         setStatus("error");
-        setError("No microphone was found or the microphone is being used by another app.");
+        setError("No microphone was found or another app is using it.");
         onError?.(code);
         return;
       }
 
       if (code === "network") {
-        setError("Speech recognition needs an internet connection.");
+        setStatus("starting");
+        setError("Reconnecting voice recognition...");
         onError?.(code);
         return;
       }
@@ -77,6 +94,8 @@ export function useSpeechRecognition({ onFinal, onError }) {
     };
 
     recognition.onend = () => {
+      if (recognitionRef.current === recognition) recognitionRef.current = null;
+      startingRef.current = false;
       setInterim("");
 
       if (!shouldListenRef.current) {
@@ -84,23 +103,33 @@ export function useSpeechRecognition({ onFinal, onError }) {
         return;
       }
 
+      clearRestart();
       setStatus("starting");
+
       restartTimerRef.current = window.setTimeout(() => {
-        if (!shouldListenRef.current) return;
-        const next = createRecognition();
-        recognitionRef.current = next;
-        try {
-          next?.start();
-        } catch {
-          shouldListenRef.current = false;
-          setStatus("error");
-          setError("Could not restart speech recognition. Please click Start Listening again.");
-        }
-      }, 300);
+        restartTimerRef.current = null;
+        startRecognition();
+      }, 450);
     };
 
-    return recognition;
-  }, [onError, onFinal]);
+    recognitionRef.current = recognition;
+    startingRef.current = true;
+
+    try {
+      recognition.start();
+    } catch (err) {
+      startingRef.current = false;
+      if (err?.name !== "InvalidStateError") {
+        setStatus("starting");
+        setError("Reconnecting voice recognition...");
+        clearRestart();
+        restartTimerRef.current = window.setTimeout(() => {
+          restartTimerRef.current = null;
+          startRecognition();
+        }, 700);
+      }
+    }
+  }, [clearRestart, onError, onFinal]);
 
   const start = useCallback(() => {
     if (!SUPPORT) {
@@ -109,53 +138,66 @@ export function useSpeechRecognition({ onFinal, onError }) {
       return;
     }
 
-    if (shouldListenRef.current) return;
-
     shouldListenRef.current = true;
+    clearRestart();
     setError("");
     setStatus("starting");
+    startRecognition();
+  }, [clearRestart, startRecognition]);
 
-    const recognition = createRecognition();
-    recognitionRef.current = recognition;
+  // Temporary pause: does not mean the user ended the voice session.
+  const pause = useCallback(() => {
+    clearRestart();
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    try { recognition?.abort(); } catch {}
+    startingRef.current = false;
+    shouldListenRef.current = false;
+    setInterim("");
+    setStatus("stopped");
+  }, [clearRestart]);
 
-    try {
-      recognition.start();
-    } catch {
-      shouldListenRef.current = false;
-      setStatus("error");
-      setError("Could not start speech recognition. Please try again.");
-    }
-  }, [createRecognition]);
+  // Same as Start, used after TTS finishes.
+  const resume = useCallback(() => {
+    if (!SUPPORT) return;
+    shouldListenRef.current = true;
+    clearRestart();
+    setStatus("starting");
+    startRecognition();
+  }, [clearRestart, startRecognition]);
 
+  // Permanent stop. Nothing is allowed to restart after this.
   const stop = useCallback(() => {
     shouldListenRef.current = false;
-    if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-    restartTimerRef.current = null;
+    clearRestart();
 
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
 
-    try {
-      recognition?.abort();
-    } catch {}
+    try { recognition?.abort(); } catch {}
 
+    startingRef.current = false;
     setInterim("");
     setStatus("stopped");
-  }, []);
-
-  const pause = useCallback(() => {
-    stop();
-  }, [stop]);
+  }, [clearRestart]);
 
   useEffect(() => {
     return () => {
       shouldListenRef.current = false;
-      if (restartTimerRef.current) window.clearTimeout(restartTimerRef.current);
-      try {
-        recognitionRef.current?.abort();
-      } catch {}
+      clearRestart();
+      try { recognitionRef.current?.abort(); } catch {}
+      recognitionRef.current = null;
     };
-  }, []);
+  }, [clearRestart]);
 
-  return { start, pause, stop, status, interim, error, supported: SUPPORT };
+  return {
+    start,
+    resume,
+    pause,
+    stop,
+    status,
+    interim,
+    error,
+    supported: SUPPORT,
+  };
 }
