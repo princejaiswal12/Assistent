@@ -1,274 +1,131 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BookOpen, ExternalLink, Trash2, Volume2, Square } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Settings as SettingsIcon, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import MicrophoneButton from "./components/MicrophoneButton";
 import StatusIndicator from "./components/StatusIndicator";
 import Transcript from "./components/Transcript";
-import { parseMeaningQuery } from "./services/intentParser";
-import { fetchMeaning, speakMeaning, stopSpeaking } from "./services/meaningService";
+import ActionHistory from "./components/ActionHistory";
+import Settings from "./components/Settings";
+import { parseIntent } from "./services/intentParser";
+import { openInNewTab } from "./services/searchService";
+import { DEFAULT_WEBSITES } from "./services/websiteRegistry";
+import { createDuplicateDetector } from "./utils/duplicateDetector";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 
-const HISTORY_KEY = "voice-meaning-history-v4";
+const STORAGE_KEY = "voicesearch-settings-v1";
+const DEFAULT_SETTINGS = { engine: "google", defaultAction: "search", duplicateWindow: 3000, websites: {} };
+
+function loadSettings() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    return { ...DEFAULT_SETTINGS, ...stored, websites: { ...(stored?.websites || {}) } };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
 
 export default function App() {
-  const [entries, setEntries] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; }
-  });
-  const [meaning, setMeaning] = useState(null);
+  const [settings, setSettings] = useState(loadSettings);
+  const [entries, setEntries] = useState([]);
+  const [actions, setActions] = useState([]);
+  const [showSettings, setShowSettings] = useState(false);
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [typedText, setTypedText] = useState("");
-  const [language, setLanguage] = useState("en");
 
-  const voiceActiveRef = useRef(false);
-  const voiceGenerationRef = useRef(0);
+  const detector = useMemo(() => createDuplicateDetector(settings.duplicateWindow), [settings.duplicateWindow]);
 
-  useEffect(() => {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(entries.slice(0, 50)));
-  }, [entries]);
+  useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); }, [settings]);
 
-  const finishVoiceTurn = useCallback((generation) => {
-    if (!voiceActiveRef.current || voiceGenerationRef.current !== generation) return;
-    setSpeaking(false);
-    resume();
-  }, []);
+  const processSentence = useCallback((sentence) => {
+    const text = sentence.trim();
+    if (!text || detector.isDuplicate(text)) return;
 
-  const processSentence = useCallback(async (sentence, fromVoice = false) => {
-    const query = parseMeaningQuery(sentence);
+    setEntries((current) => [{ id: crypto.randomUUID(), text, time: Date.now() }, ...current].slice(0, 50));
 
-    if (!query) {
-      setMessage("Please say a word, phrase, sentence, idiom, or expression.");
-      if (fromVoice) finishVoiceTurn(voiceGenerationRef.current);
+    const intent = parseIntent(text, {
+      engine: settings.engine,
+      websites: { ...DEFAULT_WEBSITES, ...settings.websites },
+    });
+
+    if (settings.defaultAction === "ignore" && intent.type === "SEARCH") {
+      setMessage("Unknown command ignored.");
       return;
     }
 
-    const generation = voiceGenerationRef.current;
-
-    setEntries((current) => [
-      { id: crypto.randomUUID(), text: sentence.trim(), time: Date.now() },
-      ...current,
-    ].slice(0, 50));
-
-    setLoading(true);
-    setSpeaking(false);
-    setMessage("");
-
-    try {
-      const result = await fetchMeaning(query, language);
-
-      if (fromVoice && (!voiceActiveRef.current || voiceGenerationRef.current !== generation)) {
-        return;
-      }
-
-      setMeaning(result);
-
-      if (result.speechText) {
-        speakMeaning(result.speechText, language, {
-          onStart: () => setSpeaking(true),
-          onEnd: () => finishVoiceTurn(generation),
-          onError: () => finishVoiceTurn(generation),
-        });
-      } else if (fromVoice) {
-        finishVoiceTurn(generation);
-      }
-    } catch (error) {
-      if (fromVoice && voiceActiveRef.current && voiceGenerationRef.current === generation) {
-        setMeaning(null);
-        setMessage(error.message || "Unable to explain that right now.");
-        finishVoiceTurn(generation);
-      } else if (!fromVoice) {
-        setMessage(error.message || "Unable to explain that right now.");
-      }
-    } finally {
-      setLoading(false);
+    if (settings.defaultAction === "confirm" && intent.type === "SEARCH") {
+      if (!window.confirm(`Search for:\n\n${intent.query}`)) return;
     }
-  }, [finishVoiceTurn, language]);
 
-  const handleFinal = useCallback((sentence) => {
-    // The recognition hook suspends its automatic restart before calling this.
-    processSentence(sentence, true);
-  }, [processSentence]);
+    if (!intent.url) return;
+
+    const success = openInNewTab(intent.url);
+    setActions((current) => [{
+      id: crypto.randomUUID(), type: intent.type, query: intent.query, success, time: Date.now()
+    }, ...current].slice(0, 50));
+
+    setMessage(success ? `Opened: ${intent.label}` : "The browser blocked the new tab. Allow pop-ups for this site and try again.");
+  }, [detector, settings]);
 
   const handleError = useCallback((code) => {
-    if (code === "not-allowed" || code === "service-not-allowed") {
-      voiceActiveRef.current = false;
-      setMessage("Microphone permission is required for continuous voice mode.");
-    } else if (code === "network") {
-      setMessage("Reconnecting voice recognition...");
-    } else if (code === "no-speech") {
-      setMessage("Listening again...");
-    }
+    if (code === "not-allowed" || code === "service-not-allowed") setMessage("Microphone permission was denied.");
   }, []);
 
-  const { resume, pause, stop, status, interim, error, supported } =
-    useSpeechRecognition({ onFinal: handleFinal, onError: handleError });
-
-  function handleStart() {
-    voiceGenerationRef.current += 1;
-    voiceActiveRef.current = true;
-    setMessage("");
-    resume();
-  }
-
-  function handlePause() {
-    voiceActiveRef.current = false;
-    voiceGenerationRef.current += 1;
-    pause();
-    stopSpeaking();
-    setSpeaking(false);
-  }
-
-  function handleStop() {
-    voiceActiveRef.current = false;
-    voiceGenerationRef.current += 1;
-    stop();
-    stopSpeaking();
-    setSpeaking(false);
-  }
-
-  function repeatMeaning() {
-    if (!meaning?.speechText) return;
-    speakMeaning(meaning.speechText, language, {
-      onStart: () => setSpeaking(true),
-      onEnd: () => setSpeaking(false),
-      onError: () => setSpeaking(false),
-    });
-  }
-
-  function submitTyped() {
-    if (typedText.trim()) processSentence(typedText.trim(), false);
-  }
+  const { start, pause, stop, status, interim, error, supported } =
+    useSpeechRecognition({ onFinal: processSentence, onError: handleError });
 
   function clearHistory() {
-    setEntries([]);
-    setMeaning(null);
-    setMessage("History cleared.");
-    stopSpeaking();
-    setSpeaking(false);
+    setEntries([]); setActions([]); detector.reset(); setMessage("History cleared.");
   }
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-icon"><BookOpen size={19} /></div>
-          <div>
-            <div className="brand-name">Voice Meaning Assistant</div>
-            <div className="brand-subtitle">One Start. Continuous voice. Automatic answers.</div>
-          </div>
+          <div className="brand-icon"><Sparkles size={19} /></div>
+          <div><div className="brand-name">VoiceSearch Assistant</div><div className="brand-subtitle">Speak naturally. Search instantly.</div></div>
         </div>
-        <div className="top-controls">
-          <label className="language-select">
-            Explain in
-            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-              <option value="en">English</option>
-              <option value="hi">Hindi</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-            </select>
-          </label>
-          <StatusIndicator status={loading ? "processing" : speaking ? "speaking" : status} />
+        <div className="top-actions">
+          <StatusIndicator status={status} />
+          <button className="icon-button" title="Settings" onClick={() => setShowSettings(true)}><SettingsIcon size={20} /></button>
         </div>
       </header>
 
       <main className="content">
-        {!supported && (
-          <div className="notice error-notice">
-            Voice recognition is not supported in this browser. Please use the latest Chrome or Edge.
-          </div>
-        )}
+        {!supported && <div className="notice error-notice">Speech recognition is not supported in this browser. Try the latest Google Chrome or Microsoft Edge.</div>}
         {error && <div className="notice error-notice">{error}</div>}
         {message && <div className="notice">{message}</div>}
 
         <section className="hero">
-          <div className="eyebrow"><span className="pulse-dot" /> CONTINUOUS VOICE</div>
-          <h1>Speak it.<br /><span>Understand it.</span></h1>
-          <p>
-            Press Start once. Ask one question after another. I find a free meaning when possible,
-            speak the result, and automatically listen again after every answer.
-          </p>
+          <div className="eyebrow"><span className="pulse-dot" /> VOICE CONTROL</div>
+          <h1>Search the web<br /><span>with your voice.</span></h1>
+          <p>Start listening, speak naturally, and let VoiceSearch route each sentence to the right website or search engine.</p>
 
-          <MicrophoneButton
-            status={status}
-            onStart={handleStart}
-            onPause={handlePause}
-            onStop={handleStop}
-          />
-
+          <MicrophoneButton status={status} onStart={start} onPause={pause} onStop={stop} />
           {interim && <div className="interim-card">“{interim}”</div>}
 
           <div className="quick-hints">
             <span>Try:</span>
-            <button onClick={() => processSentence("What does ubiquitous mean?", false)}>“What does ubiquitous mean?”</button>
-            <button onClick={() => processSentence("What does ephemeral mean?", false)}>“What does ephemeral mean?”</button>
-            <button onClick={() => processSentence("What does break a leg mean?", false)}>“What does break a leg mean?”</button>
+            <button onClick={() => processSentence("What is polymorphism in Java?")}>“What is polymorphism?”</button>
+            <button onClick={() => processSentence("Open YouTube")}>“Open YouTube”</button>
+            <button onClick={() => processSentence("Search YouTube for dynamic programming")}>“Search YouTube for DP”</button>
           </div>
         </section>
 
-        <section className="manual-search">
-          <input
-            value={typedText}
-            onChange={(e) => setTypedText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submitTyped()}
-            placeholder="Type a word, sentence, idiom, or phrase"
-            aria-label="Text to explain"
-          />
-          <button className="speak-button" onClick={submitTyped}>
-            <ExternalLink size={17} /> Explain
-          </button>
-        </section>
-
-        {loading && <div className="notice">Finding the meaning…</div>}
-
-        {meaning && (
-          <section className="meaning-card">
-            <div className="meaning-header">
-              <div>
-                <div className="meaning-word">{meaning.title}</div>
-                {meaning.phonetic && <div className="phonetic">{meaning.phonetic}</div>}
-              </div>
-              <div className="speech-actions">
-                <button className="speak-button" onClick={repeatMeaning}>
-                  <Volume2 size={18} /> {speaking ? "Speaking..." : "Speak Again"}
-                </button>
-                {speaking && (
-                  <button
-                    className="stop-speech-button"
-                    onClick={() => { stopSpeaking(); setSpeaking(false); }}
-                    title="Stop speaking"
-                  >
-                    <Square size={15} /> Stop
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="meaning-sections">
-              {meaning.meaning && <article><h3>Meaning</h3><p>{meaning.meaning}</p></article>}
-              {meaning.simple && <article><h3>In simple words</h3><p>{meaning.simple}</p></article>}
-              {meaning.translation && <article><h3>Translation</h3><p>{meaning.translation}</p></article>}
-              {meaning.example && <article><h3>Example</h3><p>{meaning.example}</p></article>}
-              {meaning.usage && <article><h3>Usage</h3><p>{meaning.usage}</p></article>}
-              {meaning.grammar && <article><h3>Grammar</h3><p>{meaning.grammar}</p></article>}
-              {meaning.similar && <article><h3>Similar words</h3><p>{meaning.similar}</p></article>}
-            </div>
-          </section>
-        )}
-
-        <div className="grid single-column">
+        <div className="grid">
           <Transcript entries={entries} interim={interim} />
+          <ActionHistory actions={actions} />
         </div>
 
         <section className="bottom-bar">
-          <div className="privacy-inline">
-            <span>Raw microphone audio is never uploaded or stored. STOP permanently ends the voice session.</span>
-          </div>
-          <button className="clear-button" onClick={clearHistory}>
-            <Trash2 size={15} /> Clear History
-          </button>
+          <div className="privacy-inline"><ShieldCheck size={17} /><span>Microphone starts only after you activate it. No raw audio is uploaded.</span></div>
+          <button className="clear-button" onClick={clearHistory}><Trash2 size={15} /> Clear History</button>
+        </section>
+
+        <section className="background-card">
+          <div><strong>Need true background listening?</strong><p>A normal webpage is constrained by browser lifecycle and speech-recognition rules. For listening while browsing other pages or after closing the app page, package this UI as a Chrome/Edge extension.</p></div>
+          <span className="extension-badge">Extension-ready architecture</span>
         </section>
       </main>
+
+      {showSettings && <Settings settings={settings} onChange={setSettings} onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
