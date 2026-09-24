@@ -7,6 +7,7 @@ export const SUPPORT =
 export function useSpeechRecognition({ onFinal, onError }) {
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
+  const suspendedRef = useRef(false);
   const startingRef = useRef(false);
   const restartTimerRef = useRef(null);
 
@@ -20,7 +21,7 @@ export function useSpeechRecognition({ onFinal, onError }) {
   }, []);
 
   const startRecognition = useCallback(() => {
-    if (!shouldListenRef.current || startingRef.current) return;
+    if (!shouldListenRef.current || suspendedRef.current || startingRef.current) return;
 
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) return;
@@ -45,13 +46,12 @@ export function useSpeechRecognition({ onFinal, onError }) {
         const result = event.results[i];
         const transcript = result?.[0]?.transcript?.trim() || "";
 
-        if (result.isFinal) {
-          if (transcript) {
-            // Pause recognition before processing so TTS cannot become the next query.
-            try { recognition.abort(); } catch {}
-            onFinal(transcript);
-          }
-        } else {
+        if (result.isFinal && transcript) {
+          // Suspend automatic restart while the query is being processed/TTS is speaking.
+          suspendedRef.current = true;
+          try { recognition.abort(); } catch {}
+          onFinal(transcript);
+        } else if (!result.isFinal) {
           live += transcript + " ";
         }
       }
@@ -64,15 +64,17 @@ export function useSpeechRecognition({ onFinal, onError }) {
 
       if (code === "not-allowed" || code === "service-not-allowed") {
         shouldListenRef.current = false;
+        suspendedRef.current = false;
         startingRef.current = false;
         setStatus("permission");
-        setError("Microphone permission was denied. Allow microphone access for continuous voice mode.");
+        setError("Microphone permission is required for continuous voice mode.");
         onError?.(code);
         return;
       }
 
       if (code === "audio-capture") {
         shouldListenRef.current = false;
+        suspendedRef.current = false;
         startingRef.current = false;
         setStatus("error");
         setError("No microphone was found or another app is using it.");
@@ -87,7 +89,12 @@ export function useSpeechRecognition({ onFinal, onError }) {
         return;
       }
 
-      if (code !== "aborted" && code !== "no-speech") {
+      if (code === "no-speech") {
+        onError?.(code);
+        return;
+      }
+
+      if (code !== "aborted") {
         setError(`Speech recognition error: ${code}`);
         onError?.(code);
       }
@@ -103,9 +110,14 @@ export function useSpeechRecognition({ onFinal, onError }) {
         return;
       }
 
+      if (suspendedRef.current) {
+        // Waiting for TTS/processing to finish. resume() will start it again.
+        setStatus("speaking");
+        return;
+      }
+
       clearRestart();
       setStatus("starting");
-
       restartTimerRef.current = window.setTimeout(() => {
         restartTimerRef.current = null;
         startRecognition();
@@ -139,41 +151,45 @@ export function useSpeechRecognition({ onFinal, onError }) {
     }
 
     shouldListenRef.current = true;
+    suspendedRef.current = false;
     clearRestart();
     setError("");
     setStatus("starting");
     startRecognition();
   }, [clearRestart, startRecognition]);
 
-  // Temporary pause: does not mean the user ended the voice session.
   const pause = useCallback(() => {
     clearRestart();
+    suspendedRef.current = false;
+    shouldListenRef.current = false;
+
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
     try { recognition?.abort(); } catch {}
+
     startingRef.current = false;
-    shouldListenRef.current = false;
     setInterim("");
     setStatus("stopped");
   }, [clearRestart]);
 
-  // Same as Start, used after TTS finishes.
+  // Resume is used after TTS or a temporary pause.
   const resume = useCallback(() => {
     if (!SUPPORT) return;
     shouldListenRef.current = true;
+    suspendedRef.current = false;
     clearRestart();
+    setError("");
     setStatus("starting");
     startRecognition();
   }, [clearRestart, startRecognition]);
 
-  // Permanent stop. Nothing is allowed to restart after this.
   const stop = useCallback(() => {
     shouldListenRef.current = false;
+    suspendedRef.current = false;
     clearRestart();
 
     const recognition = recognitionRef.current;
     recognitionRef.current = null;
-
     try { recognition?.abort(); } catch {}
 
     startingRef.current = false;
@@ -184,20 +200,12 @@ export function useSpeechRecognition({ onFinal, onError }) {
   useEffect(() => {
     return () => {
       shouldListenRef.current = false;
+      suspendedRef.current = false;
       clearRestart();
       try { recognitionRef.current?.abort(); } catch {}
       recognitionRef.current = null;
     };
   }, [clearRestart]);
 
-  return {
-    start,
-    resume,
-    pause,
-    stop,
-    status,
-    interim,
-    error,
-    supported: SUPPORT,
-  };
+  return { start, resume, pause, stop, status, interim, error, supported: SUPPORT };
 }
