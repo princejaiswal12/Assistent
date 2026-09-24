@@ -117,3 +117,7 @@ select,input { width:100%; margin-top:8px; padding:11px 12px; border:1px solid v
 .definition-text { color:#dbe1f2; font-size:14px; line-height:1.6; }
 .example { color:var(--muted); font-size:11px; margin-top:7px; font-style:italic; line-height:1.5; }
 .single-column { grid-template-columns:1fr; }
+
+.manual-search { max-width:900px; margin:0 auto 18px; display:flex; gap:10px; }
+.manual-search input { margin-top:0; flex:1; }
+@media (max-width:600px) { .manual-search { flex-direction:column; } }
