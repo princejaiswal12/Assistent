@@ -4,6 +4,13 @@ export const SUPPORT =
   typeof window !== "undefined" &&
   Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 
+function extractWakeCommand(text) {
+  const cleaned = text.trim().replace(/\s+/g, " ");
+  const match = cleaned.match(/^hey\s+siri(?:[\s,]+(.+))?$/i);
+  if (!match) return null;
+  return match[1]?.trim() || "";
+}
+
 export function useSpeechRecognition({ onFinal, onError }) {
   const recognitionRef = useRef(null);
   const shouldListenRef = useRef(false);
@@ -38,9 +45,17 @@ export function useSpeechRecognition({ onFinal, onError }) {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         const transcript = result[0]?.transcript || "";
+
         if (result.isFinal) {
           const sentence = transcript.trim();
-          if (sentence) onFinal(sentence);
+          if (!sentence) continue;
+
+          // Every voice command must begin with "Hey Siri".
+          // Anything else is ignored.
+          const command = extractWakeCommand(sentence);
+          if (command) {
+            onFinal(command);
+          }
         } else {
           interimText += transcript;
         }
