@@ -1,11 +1,12 @@
 const DICTIONARY_URL = "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const TRANSLATE_URL = "https://api.mymemory.translated.net/get";
 
-const LANGUAGE_NAMES = {
-  en: "English",
-  hi: "Hindi",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
+const LANGUAGE_CODES = {
+  english: "en",
+  hindi: "hi",
+  spanish: "es",
+  french: "fr",
+  german: "de",
 };
 
 function cleanWord(text) {
@@ -26,21 +27,35 @@ function isLikelyWord(text) {
   return /^[A-Za-z][A-Za-z'-]{1,40}$/.test(text);
 }
 
+function translationRequest(text) {
+  const match = text.match(/^(.+?)\s+into\s+(English|Hindi|Spanish|French|German)\??$/i);
+  if (!match) return null;
+  return { text: match[1].trim(), language: LANGUAGE_CODES[match[2].toLowerCase()] };
+}
+
+async function translateText(text, target) {
+  const response = await fetch(
+    `${TRANSLATE_URL}?q=${encodeURIComponent(text)}&langpair=en|${target}`
+  );
+  if (!response.ok) throw new Error("Translation service is temporarily unavailable.");
+
+  const data = await response.json();
+  const translated = data?.responseData?.translatedText?.trim();
+  if (!translated) throw new Error("No translation was returned.");
+  return translated;
+}
+
 async function dictionaryLookup(word) {
   const response = await fetch(DICTIONARY_URL + encodeURIComponent(word));
 
-  if (!response.ok) {
-    throw new Error("Dictionary result not found.");
-  }
+  if (!response.ok) throw new Error("Dictionary result not found.");
 
   const data = await response.json();
   const entry = data?.[0];
   const firstMeaning = entry?.meanings?.find((item) => item.definitions?.length);
   const definition = firstMeaning?.definitions?.[0];
 
-  if (!entry || !definition) {
-    throw new Error("No dictionary definition found.");
-  }
+  if (!entry || !definition) throw new Error("No dictionary definition found.");
 
   const synonyms = [
     ...(definition.synonyms || []),
@@ -91,6 +106,25 @@ function localPhraseMeaning(text) {
 }
 
 export async function fetchMeaning(text, targetLanguage = "en") {
+  const translation = translationRequest(text);
+
+  if (translation) {
+    const translated = await translateText(translation.text, translation.language);
+    const languageName = translation.language === "hi" ? "Hindi" :
+      translation.language === "es" ? "Spanish" :
+      translation.language === "fr" ? "French" :
+      translation.language === "de" ? "German" : "English";
+
+    return {
+      title: translation.text,
+      meaning: translated,
+      simple: `Translation into ${languageName}.`,
+      translation: translated,
+      speechText: `${translation.text}. In ${languageName}, that is: ${translated}.`,
+      provider: "MyMemory public translation service",
+    };
+  }
+
   const query = cleanWord(text);
   const phrase = localPhraseMeaning(text);
 
@@ -114,7 +148,13 @@ export async function fetchMeaning(text, targetLanguage = "en") {
   }
 
   if (targetLanguage !== "en") {
-    result.translation = `Select ${LANGUAGE_NAMES[targetLanguage] || "English"} in your browser or use the Google result for translation.`;
+    try {
+      const translated = await translateText(result.meaning || result.simple || text, targetLanguage);
+      result.translation = translated;
+      result.speechText += ` Translation: ${translated}.`;
+    } catch {
+      result.translation = "Translation is temporarily unavailable.";
+    }
   }
 
   return result;
