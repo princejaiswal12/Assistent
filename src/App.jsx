@@ -11,7 +11,7 @@ export default function App() {
   const [entries, setEntries] = useState([]);
   const [meaning, setMeaning] = useState(null);
   const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);\n  const [typedWord, setTypedWord] = useState("");
 
   const processSentence = useCallback(async (sentence) => {
     const query = parseMeaningQuery(sentence);
@@ -138,6 +138,26 @@ export default function App() {
             </div>
           </section>
         )}
+
+        <section className="manual-search">
+          <input
+            value={typedWord}
+            onChange={(e) => setTypedWord(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && typedWord.trim()) processSentence(typedWord.trim());
+            }}
+            placeholder="Test a word here, e.g. ubiquitous"
+            aria-label="Word to define"
+          />
+          <button
+            className="speak-button"
+            onClick={() => {
+              if (typedWord.trim()) processSentence(typedWord.trim());
+            }}
+          >
+            <Volume2 size={17} /> Get Meaning
+          </button>
+        </section>
 
         <div className="grid single-column">
           <Transcript entries={entries} interim={interim} />
