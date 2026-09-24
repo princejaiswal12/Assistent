@@ -168,7 +168,7 @@ export default function App() {
               <option value="de">German</option>
             </select>
           </label>
-          <StatusIndicator status={speaking ? "speaking" : status} />
+          <StatusIndicator status={loading ? "processing" : speaking ? "speaking" : status} />
         </div>
       </header>
 
