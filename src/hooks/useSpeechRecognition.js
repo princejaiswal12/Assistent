@@ -83,7 +83,7 @@ export function useSpeechRecognition({ onFinal, onError }) {
       }
 
       if (code === "network") {
-        setStatus("starting");
+        setStatus("reconnecting");
         setError("Reconnecting voice recognition...");
         onError?.(code);
         return;
