@@ -105,3 +105,15 @@ select,input { width:100%; margin-top:8px; padding:11px 12px; border:1px solid v
   .background-card { align-items:flex-start; flex-direction:column; }
   .status-pill span { display:none; }
 }
+.meaning-card { border:1px solid var(--border); background:var(--panel); backdrop-filter:blur(18px); border-radius:18px; padding:22px; margin:0 auto 18px; max-width:900px; }
+.meaning-header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; }
+.meaning-word { font-size:36px; font-weight:800; letter-spacing:-.04em; }
+.phonetic { color:var(--muted); margin-top:5px; font-size:12px; }
+.speak-button { display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:rgba(124,140,255,.12); color:white; border-radius:10px; padding:10px 13px; }
+.definitions { display:grid; gap:14px; margin-top:22px; }
+.definition { display:flex; gap:14px; padding:15px; border:1px solid rgba(255,255,255,.06); border-radius:12px; background:rgba(255,255,255,.02); }
+.definition-number { width:27px; height:27px; flex:0 0 27px; display:grid; place-items:center; border-radius:8px; background:rgba(124,140,255,.12); color:#aeb8ff; font-size:11px; font-weight:700; }
+.part-of-speech { color:#aeb8ff; font-size:10px; text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
+.definition-text { color:#dbe1f2; font-size:14px; line-height:1.6; }
+.example { color:var(--muted); font-size:11px; margin-top:7px; font-style:italic; line-height:1.5; }
+.single-column { grid-template-columns:1fr; }
