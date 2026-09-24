@@ -9,7 +9,6 @@ import { parseIntent } from "./services/intentParser";
 import { openInNewTab } from "./services/searchService";
 import { DEFAULT_WEBSITES } from "./services/websiteRegistry";
 import { createDuplicateDetector } from "./utils/duplicateDetector";
-import { fetchOxfordWord, speakFallback } from "./services/oxfordService";
 import { useSpeechRecognition } from "./hooks/useSpeechRecognition";
 
 const STORAGE_KEY = "voicesearch-settings-v1";
@@ -35,23 +34,6 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); }, [settings]);
 
-  const speakMeaning = useCallback(async (word) => {
-    try {
-      const data = await fetchOxfordWord(word, "en-gb");
-      if (data.audioFile) {
-        const audio = new Audio(data.audioFile);
-        audio.play().catch(() => speakFallback(word));
-        setMessage(`Playing Oxford Languages pronunciation: ${data.word}${data.ipa ? ` (${data.ipa})` : ""}`);
-      } else {
-        speakFallback(word, undefined, () => setMessage("Oxford pronunciation audio was unavailable."));
-        setMessage(`Oxford definition: ${data.definition || "No definition found."}`);
-      }
-    } catch {
-      speakFallback(word, undefined, () => setMessage("Pronunciation is unavailable in this browser."));
-      setMessage("Oxford pronunciation was unavailable, so browser pronunciation was used.");
-    }
-  }, []);
-
   const processSentence = useCallback((sentence) => {
     const text = sentence.trim();
     if (!text || detector.isDuplicate(text)) return;
@@ -63,6 +45,23 @@ export default function App() {
       const word = meaningMatch[2].trim();
       setEntries((current) => [{ id: crypto.randomUUID(), text, time: Date.now() }, ...current].slice(0, 50));
       speakMeaning(word);
+      return;
+    }
+
+    const meaningMatch = text.match(/^(meaning of|define|definition of|what does)\\s+(.+?)(?:\\s+mean)?\\??$/i);
+    if (meaningMatch) {
+      const word = meaningMatch[2].trim();
+      setEntries((current) => [{ id: crypto.randomUUID(), text, time: Date.now() }, ...current].slice(0, 50));
+      const url = `https://www.oxfordlearnersdictionaries.com/definition/english/${encodeURIComponent(word)}`;
+      window.open(url, "_blank", "noopener,noreferrer");
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(word);
+        utterance.lang = "en-GB";
+        window.speechSynthesis.speak(utterance);
+      }
+      setActions((current) => [{ id: crypto.randomUUID(), type: "OXFORD", query: word, success: true, time: Date.now() }, ...current].slice(0, 50));
+      setMessage(`Opened Oxford Learner's Dictionary for: ${word}`);
       return;
     }
 
